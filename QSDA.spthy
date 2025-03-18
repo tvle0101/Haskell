@@ -1,0 +1,133 @@
+/*
+Protocol: Quantum-Safe Mobile Sequencing Data Authorization Scheme
+to Facilitate Cancer Research and Treatment
+
+Modeler: Tuan-Vinh Le
+*/
+
+theory QSDA_Protocol
+begin
+
+builtins: hashing, xor, asymmetric-encryption, symmetric-encryption
+
+// Registering a public key
+rule Register_pk:
+    [ Fr(~d) ]
+  -->
+    [ !Ltk($A, ~d), !Pk($A, pk(~d)) ]
+
+rule Get_pk:
+    [ !Pk(A, PU) ]
+  -->
+    [ Out(PU) ]
+
+rule Reveal_d:
+    [ !Ltk(A, d) ]
+  --[ LtkReveal(A) ]->
+    [ Out(d) ]
+
+// User registration: suppose f are credenatials, f:= <~e,~b>
+rule setup:
+	[ Fr(~k), Fr(~f) ]
+	--[]->
+	[ AgSt($U,<~k,~f>), AgSt($S,~k) ]
+
+rule User_1: 
+	[ AgSt($U,<~k,~f>) ]
+ 	--[ Send($U,~f) ]-> 
+	[ User_1( ~f ) 
+    , Out(senc(~f,~k)) ]
+
+rule Server_1:
+	[ AgSt($S,~k), In(senc(~f,~k))  ]
+	--[ Receive($S,~f), Secret(~f) ]->
+  [ Server_1( ~f ) ]
+
+// Start a new thread executing the client role, choosing the server
+// non-deterministically.
+rule User_2:
+    [ Fr(~w)         // choose fresh key
+    , !Pk($S, pkS)   // lookup public-key of server
+    ]
+  -->
+    [ User_2( $S, ~w )    // Store server and key for next step of thread
+    , Out( aenc(~w, pkS) )  // Send the encrypted session key to the server
+    ]
+
+rule User_3:
+    [ User_2(S, w)   // Retrieve server and session key from previous step
+    , User_1(f) 
+    , In( h(w, f) )       // Receive hashed session key from network
+    ]
+  --[ SessKeyC( S, w ) ]-> // State that the session key 'w'
+    []                     // was setup with server 'S'
+
+// A server thread answering in one-step to a session-key setup request from
+// some client.
+rule Server_2:
+    [ !Ltk($S, ~dS)                             // lookup the private-key
+    , Server_1(f)
+    , In( request )                               // receive a request
+    ]
+  --[ AnswerRequest($S, adec(request, ~dS)) ]-> // Explanation below
+    [ Out( h(adec(request, ~dS), f) ) ]            // Return the hash of the
+                                                  // decrypted request.
+
+lemma nonce_secret: 
+    "All f #i #j. Secret(f) @i & K(f) @j ==> F"
+                                                
+lemma functional: exists-trace
+    "Ex U S f #i #j.
+        Send(U,f) @i
+        & Receive(S,f) @j "
+
+lemma User_session_key_secrecy:
+  " /* It cannot be that a  */
+    not(
+      Ex S w #i #j.
+        /* client has set up a session key 'w' with a server'S' */
+        SessKeyC(S, w) @ #i
+        /* and the adversary knows 'w' */
+      & K(w) @ #j
+        /* without having performed a long-term key reveal on 'S'. */
+      & not(Ex #r. LtkReveal(S) @ r)
+    )
+  "
+
+lemma User_auth:
+  " /* For all session keys 'w' setup by clients with a server 'S' */
+    ( All S w #i.  SessKeyC(S, w) @ #i
+       ==>
+         /* there is a server that answered the request */
+       ( (Ex #a. AnswerRequest(S, w) @ a)
+         /* or the adversary performed a long-term key reveal on 'S'
+            before the key was setup. */
+       | (Ex #r. LtkReveal(S) @ r & r < i)
+       )
+    )
+  "
+
+lemma User_auth_injective:
+  " /* For all session keys 'w' setup by clients with a server 'S' */
+    ( All S w #i.  SessKeyC(S, w) @ #i
+       ==>
+         /* there is a server that answered the request */
+       ( (Ex #a. AnswerRequest(S, w) @ a
+           /* and there is no other client that had the same request */
+           & (All #j. SessKeyC(S, w) @ #j ==> #i = #j)
+       )
+         /* or the adversary performed a long-term key reveal on 'S'
+            before the key was setup. */
+       | (Ex #r. LtkReveal(S) @ r & r < i)
+       )
+    )
+  "
+
+lemma User_session_key_honest_setup:
+  exists-trace
+  " Ex S w #i.
+        SessKeyC(S, w) @ #i
+      & not(Ex #r. LtkReveal(S) @ r)
+  "
+
+end
